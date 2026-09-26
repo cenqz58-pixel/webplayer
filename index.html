@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TV Stream Player</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1/dist/mpegts.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #05060a;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: #fff;
+    overflow: hidden;
+  }
+
+  /* ================= CODE-SCREEN (Login-Logik unverändert) ================= */
+  #code-screen {
+    width: 100vw; height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px;
+    background: #05060a;
+  }
+  #code-screen .logo { font-size: 30px; color: #3ea6ff; letter-spacing: 1px; font-weight: 600; }
+  #code-digits { display: flex; gap: 14px; }
+  .digit-box {
+    width: 56px; height: 68px; border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 3px solid rgba(255,255,255,0.12);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 32px; font-weight: 600;
+  }
+  .digit-box.filled { border-color: #3ea6ff; }
+  .digit-box.active { border-color: #3ea6ff; box-shadow: 0 0 0 4px rgba(62,166,255,0.3); }
+  #code-hint { color: rgba(255,255,255,0.55); font-size: 15px; text-align: center; max-width: 420px; line-height: 1.5; }
+  #code-error { color: #ff5a5a; font-size: 15px; min-height: 20px; }
+  #code-keypad { display: grid; grid-template-columns: repeat(3, 64px); gap: 10px; margin-top: 6px; }
+  #code-keypad button {
+    width: 64px; height: 56px; font-size: 22px; border-radius: 8px;
+    border: 2px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color: #fff; cursor: pointer;
+  }
+  #code-keypad button:focus, #code-keypad button.kp-focused {
+    outline: none; border-color: #3ea6ff; box-shadow: 0 0 0 3px rgba(62,166,255,0.35);
+  }
+  #code-spinner { display: none; color: rgba(255,255,255,0.55); font-size: 14px; }
+
+  /* ================= PLAYER (neues Design) ================= */
+  #app-container { display: none; position: relative; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+  #app-container.active { display: block; }
+
+  .video-wrapper {
+    position: absolute; inset: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: center; background: #000;
+  }
+  video { width: 100%; height: 100%; transition: object-fit 0.3s ease; }
+  video.fit-cover   { object-fit: cover; }
+  video.fit-contain { object-fit: contain; }
+  video.fit-fill    { object-fit: fill; }
+
+  /* Zapping Info-Leiste unten */
+  .zap-bar {
+    position: absolute; bottom: 30px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    width: calc(100% - 80px); max-width: 900px;
+    background: rgba(18,18,22,0.6);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    border-radius: 16px; padding: 16px 24px;
+    display: flex; align-items: center; gap: 20px;
+    z-index: 20; opacity: 0; pointer-events: none;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .zap-bar.visible { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+  .zap-logo { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; background: rgba(255,255,255,0.1); flex-shrink: 0; }
+  .zap-info { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+  .zap-title { font-size: 1.15rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .zap-epg { font-size: 0.9rem; color: rgba(255,255,255,0.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: none; }
+  .zap-epg.has-data { display: block; }
+  .zap-badge { font-size: 0.75rem; padding: 3px 8px; background: rgba(255,255,255,0.15); border-radius: 6px; color: rgba(255,255,255,0.9); text-transform: uppercase; font-weight: 600; align-self: flex-start; }
+
+  /* Sidebar Senderliste */
+  .sidebar {
+    position: absolute; top: 0; left: 0; width: 25vw; min-width: 280px; max-width: 360px; height: 100%;
+    background: rgba(12,12,16,0.6);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    z-index: 30; display: flex; flex-direction: column;
+    transform: translateX(-100%);
+    transition: transform 0.4s cubic-bezier(0.16,1,0.3,1);
+    border-right: 1px solid rgba(255,255,255,0.05);
+  }
+  .sidebar.visible { transform: translateX(0); }
+  .sidebar-header { padding: 24px 20px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sidebar-title { font-size: 1.1rem; font-weight: 600; }
+  .btn-back { background: rgba(255,255,255,0.1); border: none; color: #fff; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 500; }
+  .btn-back:hover { background: rgba(255,255,255,0.2); }
+
+  .channel-list { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .channel-item {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(255,255,255,0.03); cursor: pointer;
+    border: 2px solid transparent;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .channel-item:hover { background: rgba(255,255,255,0.1); }
+  .channel-item.active { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.25); }
+  .channel-item.focused { border-color: #e5344a; }
+
+  .item-media { width: 48px; height: 48px; border-radius: 8px; object-fit: cover; background: rgba(0,0,0,0.3); flex-shrink: 0; }
+  .item-details { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 3px; }
+  .item-name { font-size: 0.95rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-epg { font-size: 0.8rem; color: rgba(255,255,255,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .top-controls { position: absolute; top: 20px; right: 20px; z-index: 15; display: flex; gap: 10px; }
+  .ctrl-btn {
+    background: rgba(18,18,22,0.6);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.1); color: #fff;
+    padding: 10px 16px; border-radius: 10px; cursor: pointer; font-size: 0.85rem; font-weight: 500;
+  }
+  .ctrl-btn:hover { background: rgba(255,255,255,0.2); }
+
+  #status {
+    position: absolute; top: 20px; left: 20px;
+    background: rgba(0,0,0,0.6); padding: 8px 14px; border-radius: 6px;
+    font-size: 14px; color: #fff; display: none; z-index: 50;
+  }
+  #status.show { display: block; }
+</style>
+</head>
+<body>
+
+<!-- ===== CODE-EINGABE-BILDSCHIRM (unverändert in der Logik) ===== -->
+<div id="code-screen">
+  <div class="logo">📺 Zugang freischalten</div>
+  <div id="code-digits">
+    <div class="digit-box" data-i="0"></div>
+    <div class="digit-box" data-i="1"></div>
+    <div class="digit-box" data-i="2"></div>
+    <div class="digit-box" data-i="3"></div>
+    <div class="digit-box" data-i="4"></div>
+  </div>
+  <div id="code-error"></div>
+  <div id="code-spinner">Wird geprüft…</div>
+  <div id="code-hint">Gib den 5-stelligen Code ein, den du erhalten hast.<br>Zahlen der Fernbedienung oder unten antippen. Zum Löschen "←", zum Bestätigen "OK".</div>
+  <div id="code-keypad">
+    <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+    <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+    <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+    <button data-key="back">←</button><button data-key="0">0</button><button data-key="ok">OK</button>
+  </div>
+</div>
+
+<!-- ===== PLAYER-BILDSCHIRM (neues Design) ===== -->
+<div id="app-container">
+  <div class="video-wrapper">
+    <video id="video-player" class="fit-cover"></video>
+  </div>
+
+  <div class="top-controls">
+    <button class="ctrl-btn" id="btn-toggle-list">☰ Senderliste</button>
+    <button class="ctrl-btn" id="btn-format">Aspect: Cover (16:9)</button>
+    <button class="ctrl-btn" id="btn-logout">Abmelden</button>
+  </div>
+
+  <div class="zap-bar" id="zap-bar">
+    <img id="zap-logo" class="zap-logo" src="" alt="Logo">
+    <div class="zap-info">
+      <div class="zap-title" id="zap-title">Sender Name</div>
+      <div class="zap-epg" id="zap-epg"></div>
+      <div class="zap-badge" id="zap-badge">LIVE</div>
+    </div>
+  </div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Sender</span>
+      <button class="btn-back" id="btn-close-sidebar">✕ Zurück</button>
+    </div>
+    <div class="channel-list" id="channel-list"></div>
+  </aside>
+
+  <div id="status"></div>
+</div>
+
+<script>
+(function () {
+  // ====================================================================
+  // KONFIGURATION (Login-Logik unverändert)
+  // ====================================================================
+  const UNLOCK_API = 'https://iptv-backend-1ox7.onrender.com/api/unlock?code=';
+  const PROXY_BASE = UNLOCK_API.split('/api/unlock')[0]; // gleiche Server-Basis wie UNLOCK_API
+  const ZAP_BAR_DURATION = 5000;
+
+  function proxied(url) {
+    return PROXY_BASE + '/api/proxy?url=' + encodeURIComponent(url);
+  }
+
+  // ---------- Elemente: Code-Screen ----------
+  const codeScreen = document.getElementById('code-screen');
+  const digitBoxes = Array.from(document.querySelectorAll('.digit-box'));
+  const codeError = document.getElementById('code-error');
+  const codeSpinner = document.getElementById('code-spinner');
+  const keypad = document.getElementById('code-keypad');
+  const keypadButtons = Array.from(keypad.querySelectorAll('button'));
+
+  // ---------- Elemente: Player (neues Design) ----------
+  const appContainer = document.getElementById('app-container');
+  const video = document.getElementById('video-player');
+  const sidebar = document.getElementById('sidebar');
+  const channelListEl = document.getElementById('channel-list');
+  const zapBar = document.getElementById('zap-bar');
+  const zapLogo = document.getElementById('zap-logo');
+  const zapTitle = document.getElementById('zap-title');
+  const zapEpg = document.getElementById('zap-epg');
+  const zapBadge = document.getElementById('zap-badge');
+  const btnToggleList = document.getElementById('btn-toggle-list');
+  const btnCloseSidebar = document.getElementById('btn-close-sidebar');
+  const btnFormat = document.getElementById('btn-format');
+  const btnLogout = document.getElementById('btn-logout');
+  const statusEl = document.getElementById('status');
+
+  const aspectFormats = [
+    { class: 'fit-cover', name: 'Aspect: Cover (16:9)' },
+    { class: 'fit-contain', name: 'Aspect: Contain (Original)' },
+    { class: 'fit-fill', name: 'Aspect: Stretch (Fill)' }
+  ];
+  let currentFormatIndex = 0;
+
+  let hls = null;
+  let mpegtsPlayer = null;
+  let channels = [];       // {name, url, logo, epgNow, epgNext}
+  let focusedIndex = -1;
+  let selectedIndex = -1;
+  let zapTimer = null;
+
+  // ==================== CODE-EINGABE-LOGIK (unverändert) ====================
+  let code = '';
+  let kpFocus = 0;
+
+  function renderDigits() {
+    digitBoxes.forEach((box, i) => {
+      box.textContent = code[i] ? '•' : '';
+      box.classList.toggle('filled', !!code[i]);
+      box.classList.toggle('active', i === code.length);
+    });
+  }
+  function renderKeypadFocus() {
+    keypadButtons.forEach((btn, i) => btn.classList.toggle('kp-focused', i === kpFocus));
+  }
+  function pressKey(key) {
+    codeError.textContent = '';
+    if (key === 'back') { code = code.slice(0, -1); }
+    else if (key === 'ok') {
+      if (code.length === 5) submitCode();
+      else codeError.textContent = 'Bitte alle 5 Ziffern eingeben.';
+      return;
+    } else {
+      if (code.length < 5) code += key;
+      if (code.length === 5) { submitCode(); return; }
+    }
+    renderDigits();
+  }
+
+  async function submitCode() {
+    renderDigits();
+    codeSpinner.style.display = 'block';
+    codeError.textContent = '';
+    try {
+      const res = await fetch(UNLOCK_API + encodeURIComponent(code));
+      if (!res.ok) throw new Error('invalid');
+      const data = await res.json();
+      const urls = data.m3uUrls || (data.m3uUrl ? [data.m3uUrl] : []);
+      if (!data.ok || !urls.length) throw new Error('invalid');
+
+      codeSpinner.style.display = 'none';
+      await loadPlaylists(urls, data.label);
+      codeScreen.style.display = 'none';
+      appContainer.classList.add('active');
+      try { appContainer.requestFullscreen && appContainer.requestFullscreen(); } catch (e) {}
+    } catch (err) {
+      codeSpinner.style.display = 'none';
+      codeError.textContent = 'Ungültiger Code. Bitte erneut versuchen.';
+      code = '';
+      renderDigits();
+    }
+  }
+
+  keypadButtons.forEach((btn, i) => {
+    btn.addEventListener('click', () => { kpFocus = i; renderKeypadFocus(); pressKey(btn.dataset.key); });
+  });
+
+  function doLogout() {
+    appContainer.classList.remove('active');
+    closeSidebar();
+    hideZapBar();
+    codeScreen.style.display = 'flex';
+    code = '';
+    renderDigits();
+    if (hls) { hls.destroy(); hls = null; }
+    video.removeAttribute('src');
+    video.load();
+    if (document.fullscreenElement) { try { document.exitFullscreen(); } catch (e) {} }
+  }
+  btnLogout.addEventListener('click', doLogout);
+
+  document.addEventListener('keydown', (e) => {
+    if (appContainer.classList.contains('active')) return;
+    const key = e.key;
+    if (/^[0-9]$/.test(key)) { e.preventDefault(); pressKey(key); }
+    else if (key === 'Backspace') { e.preventDefault(); pressKey('back'); }
+    else if (key === 'Enter') { e.preventDefault(); pressKey('ok'); }
+    else if (key === 'ArrowRight') { e.preventDefault(); kpFocus = Math.min(kpFocus + 1, keypadButtons.length - 1); renderKeypadFocus(); }
+    else if (key === 'ArrowLeft') { e.preventDefault(); kpFocus = Math.max(kpFocus - 1, 0); renderKeypadFocus(); }
+    else if (key === 'ArrowDown') { e.preventDefault(); kpFocus = Math.min(kpFocus + 3, keypadButtons.length - 1); renderKeypadFocus(); }
+    else if (key === 'ArrowUp') { e.preventDefault(); kpFocus = Math.max(kpFocus - 3, 0); renderKeypadFocus(); }
+  });
+  renderDigits();
+  renderKeypadFocus();
+
+  // ==================== M3U PARSER (unverändert) ====================
+  function parseM3U(text) {
+    const lines = text.split(/\r?\n/);
+    const result = [];
+    let currentName = null;
+    let currentLogo = null;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (line.startsWith('#EXTINF')) {
+        const logoMatch = line.match(/tvg-logo="([^"]*)"/i);
+        currentLogo = logoMatch ? logoMatch[1] : null;
+        const commaIdx = line.lastIndexOf(',');
+        currentName = commaIdx !== -1 ? line.slice(commaIdx + 1).trim() : 'Unbenannt';
+      } else if (!line.startsWith('#')) {
+        result.push({ name: currentName || line, url: line, logo: currentLogo, epgNow: null, epgNext: null });
+        currentName = null; currentLogo = null;
+      }
+    }
+    return result;
+  }
+
+  async function loadPlaylists(urls, fallbackName) {
+    if (!urls || !urls.length) return;
+    showStatus('Playlist' + (urls.length > 1 ? 's werden' : ' wird') + ' geladen…');
+
+    let combined = [];
+    let anySuccess = false;
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      try {
+        const res = await fetch(proxied(url));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+
+        if (text.includes('#EXTINF')) {
+          const parsed = parseM3U(text);
+          if (parsed.length) { combined = combined.concat(parsed); anySuccess = true; }
+          else { combined.push({ name: (fallbackName || 'Stream') + (urls.length > 1 ? ' ' + (i + 1) : ''), url: url, logo: null, epgNow: null, epgNext: null }); anySuccess = true; }
+        } else {
+          combined.push({ name: (fallbackName || 'Stream') + (urls.length > 1 ? ' ' + (i + 1) : ''), url: url, logo: null, epgNow: null, epgNext: null });
+          anySuccess = true;
+        }
+      } catch (err) {
+        showStatus('Fehler bei einer Playlist: ' + err.message, 3000);
+      }
+    }
+
+    if (!anySuccess) {
+      showStatus('Keine Playlist konnte geladen werden', 4000);
+      return;
+    }
+
+    channels = combined;
+    renderPlaylist();
+    showStatus(channels.length + ' Sender geladen', 2500);
+    focusedIndex = 0;
+    loadChannel(0);
+  }
+
+  // ==================== LOGO-FALLBACK ====================
+  function placeholderLogo(name) {
+    const letter = (name || '?').trim().charAt(0).toUpperCase();
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>"
+      + "<rect width='100' height='100' rx='16' fill='%2324304a'/>"
+      + "<text x='50' y='60' font-size='42' font-family='Arial, sans-serif' fill='%23cfe4ff' text-anchor='middle'>" + letter + "</text></svg>";
+    return 'data:image/svg+xml;utf8,' + svg;
+  }
+
+  // ==================== SENDERLISTE (Sidebar) ====================
+  function renderPlaylist() {
+    channelListEl.innerHTML = '';
+    channels.forEach((ch, index) => {
+      const div = document.createElement('div');
+      div.className = 'channel-item';
+      div.dataset.index = index;
+
+      const img = document.createElement('img');
+      img.className = 'item-media';
+      img.src = ch.logo || placeholderLogo(ch.name);
+      img.onerror = () => { img.src = placeholderLogo(ch.name); };
+
+      const details = document.createElement('div');
+      details.className = 'item-details';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'item-name';
+      nameEl.textContent = ch.name;
+      const epgEl = document.createElement('div');
+      epgEl.className = 'item-epg';
+      epgEl.textContent = ch.epgNow || '';
+      details.appendChild(nameEl);
+      details.appendChild(epgEl);
+
+      div.appendChild(img);
+      div.appendChild(details);
+      div.addEventListener('click', () => { focusedIndex = index; loadChannel(index); closeSidebar(); });
+      channelListEl.appendChild(div);
+    });
+    updateListVisuals();
+  }
+
+  function updateListVisuals() {
+    const items = channelListEl.querySelectorAll('.channel-item');
+    items.forEach((el, i) => {
+      el.classList.toggle('active', i === selectedIndex);
+      el.classList.toggle('focused', i === focusedIndex);
+    });
+    if (focusedIndex >= 0 && items[focusedIndex]) {
+      items[focusedIndex].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function openSidebar() {
+    sidebar.classList.add('visible');
+    if (focusedIndex < 0) focusedIndex = Math.max(selectedIndex, 0);
+    updateListVisuals();
+    hideZapBar();
+  }
+  function closeSidebar() { sidebar.classList.remove('visible'); }
+  function isSidebarOpen() { return sidebar.classList.contains('visible'); }
+
+  btnToggleList.addEventListener('click', () => { focusedIndex = selectedIndex; openSidebar(); });
+  btnCloseSidebar.addEventListener('click', closeSidebar);
+
+  // ==================== ZAP-LEISTE ====================
+  function showZapBar(ch, index) {
+    zapLogo.src = ch.logo || placeholderLogo(ch.name);
+    zapLogo.onerror = () => { zapLogo.src = placeholderLogo(ch.name); };
+    zapTitle.textContent = ch.name;
+    if (ch.epgNow) {
+      zapEpg.classList.add('has-data');
+      zapEpg.textContent = ch.epgNow + (ch.epgNext ? ' · Danach: ' + ch.epgNext : '');
+    } else {
+      zapEpg.classList.remove('has-data');
+      zapEpg.textContent = '';
+    }
+    zapBadge.textContent = 'LIVE';
+
+    zapBar.classList.add('visible');
+    clearTimeout(zapTimer);
+    zapTimer = setTimeout(() => hideZapBar(), ZAP_BAR_DURATION);
+  }
+  function hideZapBar() {
+    clearTimeout(zapTimer);
+    zapBar.classList.remove('visible');
+  }
+
+  // ==================== FORMAT / ASPECT ====================
+  btnFormat.addEventListener('click', () => {
+    currentFormatIndex = (currentFormatIndex + 1) % aspectFormats.length;
+    video.className = aspectFormats[currentFormatIndex].class;
+    btnFormat.textContent = aspectFormats[currentFormatIndex].name;
+  });
+
+  // ==================== PLAYER ====================
+  function loadChannel(index) {
+    const ch = channels[index];
+    if (!ch) return;
+    selectedIndex = index;
+    updateListVisuals();
+    playStream(ch.url);
+    closeSidebar();
+    showZapBar(ch, index);
+  }
+
+  function playStream(url) {
+    if (hls) { hls.destroy(); hls = null; }
+    if (mpegtsPlayer) { try { mpegtsPlayer.destroy(); } catch (e) {} mpegtsPlayer = null; }
+    video.removeAttribute('src');
+    video.load();
+
+    const lowerUrl = url.toLowerCase();
+    const isM3U8 = lowerUrl.includes('.m3u8') || lowerUrl.includes('m3u8');
+    const isRawTS = !isM3U8 && (lowerUrl.includes('.ts') || lowerUrl.includes('output=mpegts') || lowerUrl.includes('output=ts'));
+
+    const proxiedUrl = proxied(url);
+
+    if (isM3U8) {
+      if (window.Hls && Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(proxiedUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (event, data) => { if (data.fatal) showStatus('Stream-Fehler: ' + data.type, 4000); });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = proxiedUrl;
+      } else {
+        showStatus('HLS wird nicht unterstützt', 4000);
+        return;
+      }
+    } else if (isRawTS) {
+      // Xtream-Codes-Style Stream (m3u_plus&output=mpegts) -> rohes MPEG-TS
+      if (window.mpegts && mpegts.isSupported()) {
+        mpegtsPlayer = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: proxiedUrl });
+        mpegtsPlayer.attachMediaElement(video);
+        mpegtsPlayer.load();
+        mpegtsPlayer.on(mpegts.Events.ERROR, () => showStatus('Stream-Fehler (MPEG-TS)', 4000));
+        mpegtsPlayer.play().catch(() => {});
+        return;
+      } else {
+        showStatus('MPEG-TS wird auf diesem Gerät nicht unterstützt', 4000);
+        return;
+      }
+    } else {
+      video.src = proxiedUrl;
+    }
+    video.play().catch(() => {});
+  }
+
+  function switchChannel(delta) {
+    if (!channels.length) return;
+    let next = selectedIndex + delta;
+    if (next < 0) next = channels.length - 1;
+    if (next >= channels.length) next = 0;
+    focusedIndex = next;
+    loadChannel(next);
+  }
+
+  function showStatus(msg, autoHideMs) {
+    statusEl.textContent = msg;
+    statusEl.classList.add('show');
+    if (autoHideMs) {
+      clearTimeout(showStatus._t);
+      showStatus._t = setTimeout(() => statusEl.classList.remove('show'), autoHideMs);
+    }
+  }
+
+  // ==================== FERNBEDIENUNGS-STEUERUNG IM PLAYER ====================
+  const BACK_KEYS = ['Escape', 'Backspace', 'XF86Back', 'GoBack'];
+  const BACK_KEYCODES = [10009]; // Tizen TV Remote "Zurück"
+
+  document.addEventListener('keydown', (e) => {
+    if (!appContainer.classList.contains('active')) return;
+    const key = e.key;
+
+    if (isSidebarOpen()) {
+      if (key === 'ArrowUp') { e.preventDefault(); if (focusedIndex > 0) { focusedIndex--; updateListVisuals(); } }
+      else if (key === 'ArrowDown') { e.preventDefault(); if (focusedIndex < channels.length - 1) { focusedIndex++; updateListVisuals(); } }
+      else if (key === 'Enter') { e.preventDefault(); if (focusedIndex >= 0) loadChannel(focusedIndex); }
+      else if (BACK_KEYS.includes(key) || BACK_KEYCODES.includes(e.keyCode)) { e.preventDefault(); closeSidebar(); }
+      return;
+    }
+
+    if (key === 'Enter') { e.preventDefault(); focusedIndex = selectedIndex; openSidebar(); }
+    else if (key === 'ArrowUp') { e.preventDefault(); switchChannel(-1); }
+    else if (key === 'ArrowDown') { e.preventDefault(); switchChannel(1); }
+    else if (BACK_KEYS.includes(key) || BACK_KEYCODES.includes(e.keyCode)) { e.preventDefault(); doLogout(); }
+  });
+})();
+</script>
+</body>
+</html>
